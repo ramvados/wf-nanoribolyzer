@@ -136,23 +136,42 @@ process dorado_basecalling{
 
 
 process trim_barcodes{
-    label 'other_tools'
+    label 'barbell_tools'
     publishDir "${params.out_dir}/basecalling_output/", mode: 'copy'
     stageInMode 'symlink'
+
     input:
-        path(fastq_not_trimmed) 
+        path(fastq_not_trimmed)
+        path(barcode_fasta)
+        path(barbell_filters)
+
     output:
-        path("basecalled.fastq.gz"), emit: basecalled_fastq  
+        path("basecalled.fastq.gz"), emit: basecalled_fastq
+
     script:
     """
-    mkdir -p chunks
-    zcat ${fastq_not_trimmed} | split -l 8000000 -d -a 4 - chunks/chunk_
-    for chunk in chunks/chunk_*; do
-        porechop -i "\$chunk" -o "\${chunk}_trimmed" --threads ${params.threads}
-        rm \$chunk
-        cat "\${chunk}_trimmed" >> basecalled.fastq
-        rm "\${chunk}_trimmed"
-    done
+    zcat ${fastq_not_trimmed} > reads.fastq
+
+    barbell annotate \
+        -q ${barcode_fasta} \
+        -b Ftag \
+        -i reads.fastq \
+        -o anno.tsv \
+        -t ${params.threads}
+
+    barbell filter \
+        -i anno.tsv \
+        -f ${barbell_filters} \
+        -o filtered.tsv
+
+    mkdir -p trimmed
+
+    barbell trim \
+        -i filtered.tsv \
+        -r reads.fastq \
+        -o trimmed
+
+    cat trimmed/*.fastq > basecalled.fastq
     gzip basecalled.fastq
     """
 }
@@ -810,9 +829,11 @@ workflow{
     dorado_basecalling(
         "${params.sample_folder}", 
         "${params.basecalling_model}"
-        )
+       )
     trim_barcodes(
-        dorado_basecalling.out.fastq_not_trimmed
+        dorado_basecalling.out.fastq_not_trimmed,
+        file("${projectDir}/data/DRB004_RNA01-12.fasta"),
+        file("${projectDir}/data/barbell_DRB004_filters.txt")
         )
     align_to_45SN1(
         trim_barcodes.out.basecalled_fastq, 
