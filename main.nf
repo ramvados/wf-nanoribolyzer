@@ -1,7 +1,4 @@
-#!/usr/bin/ nextflow
-//@Grab('com.xlson.groovycsv:groovycsv:1.1')
-import com.xlson.groovycsv.*
-import java.io.File;
+#!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -14,42 +11,6 @@ nextflow.enable.dsl=2
 //                                                                                                                                                         //
 //                                                                                                                                                         //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-println "Seqfolder"
-println params.sample_folder
-println ""
-
-println "Color"
-println params.color
-println ""
-
-println "Script folder"
-println params.script_folder
-println ""
-
-println "Output folder"
-println params.out_dir
-println ""
-
-println "Basecalling model"
-println params.basecalling_model
-println ""
-
-println "Threads"
-println params.threads
-println ""
-
-println "Sample type"
-println params.sample_type
-println ""
-
-println "Demand"
-println params.demand
-println ""
-
-println "Model Organism"
-println params.model_organism
-println ""
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                                                                                                                                                         // 
@@ -66,7 +27,7 @@ println ""
 
 process dorado_basecalling{
     label 'dorado_basecaller'
-    publishDir "${params.out_dir}", mode: 'copy'
+    publishDir "${params.out_dir}/shared/", mode: 'copy'
     stageInMode 'symlink'
     input:
     path(sample_folder)
@@ -80,7 +41,14 @@ process dorado_basecalling{
     path('converted_to_pod5/converted.pod5'), emit: converted_pod5
     
     script:
+    def dorado_executable = params.get('dorado_executable') ?: 'dorado'
+    def dorado_models_directory = params.get('dorado_models_directory') ?: ''
     """ 
+    DORADO_MODELS_ARGS=()
+    if [ -n "${dorado_models_directory}" ]; then
+        DORADO_MODELS_ARGS=(--models-directory "${dorado_models_directory}")
+    fi
+
     mkdir -p basecalling_output
     mkdir -p converted_to_pod5
 
@@ -97,9 +65,9 @@ process dorado_basecalling{
         pod5 convert fast5 ${sample_folder}/*.fast5\
          --output converted_to_pod5/converted.pod5\
          --force-overwrite
-        dorado basecaller ${basecalling_model} converted_to_pod5/\
+        ${dorado_executable} basecaller "\${DORADO_MODELS_ARGS[@]}" ${basecalling_model} converted_to_pod5/\
          > basecalling_output/basecalled.bam 
-        dorado summary basecalling_output/basecalled.bam\
+        ${dorado_executable} summary basecalling_output/basecalled.bam\
          > basecalling_output/sequencing_summary.txt
         samtools bam2fq basecalling_output/basecalled.bam\
          -@ ${params.threads}\
@@ -111,9 +79,9 @@ process dorado_basecalling{
     fi
     if [ \$filetype == pod5 ]
     then
-        dorado basecaller ${basecalling_model} ${sample_folder}\
+        ${dorado_executable} basecaller "\${DORADO_MODELS_ARGS[@]}" ${basecalling_model} ${sample_folder}\
          > basecalling_output/basecalled.bam
-        dorado summary basecalling_output/basecalled.bam\
+        ${dorado_executable} summary basecalling_output/basecalled.bam\
          > basecalling_output/sequencing_summary.txt
         samtools bam2fq basecalling_output/basecalled.bam\
          -@ ${params.threads}\
@@ -136,26 +104,79 @@ process dorado_basecalling{
 
 
 process trim_barcodes{
-    label 'other_tools'
-    publishDir "${params.out_dir}/basecalling_output/", mode: 'copy'
+    label 'barbell_tools'
+    publishDir "${params.out_dir}/shared/barbell_demultiplexing/", mode: 'copy'
     stageInMode 'symlink'
+
     input:
-        path(fastq_not_trimmed) 
+        path(fastq_not_trimmed)
+        path(barcode_fasta)
+        path(barbell_filters)
+        val(demultiplex)
+
     output:
-        path("basecalled.fastq.gz"), emit: basecalled_fastq  
+        path("basecalled.fastq.gz"), emit: combined_fastq, optional: true
+        path("trimmed/*.fastq.gz"), emit: demultiplexed_fastqs, optional: true
+
+    script:
+    """
+    zcat ${fastq_not_trimmed} > reads.fastq
+
+    barbell annotate \
+        -q ${barcode_fasta} \
+        -b Ftag \
+        -i reads.fastq \
+        -o anno.tsv \
+        -t ${params.threads}
+
+    barbell filter \
+        -i anno.tsv \
+        -f ${barbell_filters} \
+        -o filtered.tsv
+
+    mkdir -p trimmed
+
+    barbell trim \
+        -i filtered.tsv \
+        -r reads.fastq \
+        -o trimmed \
+        --gzip
+
+    if [ "${demultiplex}" != "true" ]
+    then
+        zcat trimmed/*.fastq.gz | gzip -c > basecalled.fastq.gz
+    fi
+    """
+}
+
+
+process porechop_trimming{
+    label 'other_tools'
+    publishDir "${params.out_dir}/shared/porechop/", mode: 'copy'
+    stageInMode 'symlink'
+
+    input:
+        path(fastq_not_trimmed)
+
+    output:
+        path("basecalled.fastq.gz"), emit: basecalled_fastq
+
     script:
     """
     mkdir -p chunks
     zcat ${fastq_not_trimmed} | split -l 8000000 -d -a 4 - chunks/chunk_
+    : > basecalled.fastq
+
     for chunk in chunks/chunk_*; do
         porechop -i "\$chunk" -o "\${chunk}_trimmed" --threads ${params.threads}
-        rm \$chunk
         cat "\${chunk}_trimmed" >> basecalled.fastq
-        rm "\${chunk}_trimmed"
+        rm "\$chunk" "\${chunk}_trimmed"
     done
+
     gzip basecalled.fastq
     """
 }
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                                                                                                                                                         // 
@@ -173,16 +194,17 @@ process trim_barcodes{
 
 process align_to_45SN1{
     label 'other_tools'
-    publishDir "${params.out_dir}/basecalling_output/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/basecalling_output/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(basecalled_fastq) 
+        tuple val(sample_id), path(basecalled_fastq)
         path(reference), stageAs:"reference.fasta"
     output:
-        val 1, emit: done
-        path("filtered.bam"), emit: filtered_bam
-        path("filtered.bam.bai"), emit: filtered_bai
-        path("filtered.fastq.gz"),emit: filtered_fastq
+        tuple val(sample_id), path("filtered.bam"), path("filtered.bam.bai"), emit: aligned_bam
+        tuple val(sample_id), path("filtered.fastq.gz"), emit: filtered_fastq
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     minimap2\
      -ax map-ont\
@@ -217,18 +239,18 @@ process align_to_45SN1{
 
 process filter_pod5_for_RNA45s_aligning_reads{
     label 'other_tools'
-    publishDir "${params.out_dir}/filtered_pod5/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/filtered_pod5/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(filtered_bam)
-        path(filtered_bai)
+        tuple val(sample_id), path(filtered_bam), path(filtered_bai)
         path(sample_folder)
         path(converted_pod5), stageAs: "converted.pod5"
     output:
-        val 1, emit: done
-        path("filtered.pod5"), emit: filtered_pod5
-        path("filtered.bam"), emit: filtered_bam
-        path("sorted_filtered_reads.txt"), emit: sorted_filtered_read_ids, optional: true
+        tuple val(sample_id), path("filtered.pod5"), path("filtered.bam"), emit: filtered_reads
+        tuple val(sample_id), path("sorted_filtered_reads.txt"), emit: sorted_filtered_read_ids, optional: true
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     mkdir -p filtered_pod5
     (ls ${sample_folder}/*.pod5) && export filetype=pod5 || export filetype=fast5 
@@ -288,19 +310,33 @@ process filter_pod5_for_RNA45s_aligning_reads{
 
 process rebasecall_filtered_files{
     label 'dorado_basecaller'
-    publishDir "${params.out_dir}/filtered_pod5/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/filtered_pod5/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(filtered_pod5)
-        path(filtered_bam)
+        tuple val(sample_id), path(filtered_pod5), path(filtered_bam)
         path(reference), stageAs: "reference.fasta"
         val basecalling_model
         val filetype
     output:
-        val 1, emit: done
-        path("filtered_pod5_basecalled.bam") , emit: rebasecalled_bam
-        path("filtered_pod5_basecalled.bam.bai"), emit: rebasecalled_bam_bai
+        tuple val(sample_id), path("filtered_pod5_basecalled.bam"), path("filtered_pod5_basecalled.bam.bai"), emit: rebasecalled
+        tuple val(sample_id), val(1), emit: done
+    script:
+    def dorado_executable = params.get('dorado_executable') ?: 'dorado'
+    def dorado_models_directory = params.get('dorado_models_directory') ?: ''
+    def dorado_rna_model = params.get('dorado_rna_model') ?: 'sup,m6A,pseU'
+    def dorado_modified_bases_models = params.get('dorado_modified_bases_models') ?: ''
     """
+    DORADO_MODELS_ARGS=()
+    if [ -n "${dorado_models_directory}" ]; then
+        DORADO_MODELS_ARGS=(--models-directory "${dorado_models_directory}")
+    fi
+
+    DORADO_MOD_ARGS=()
+    if [ -n "${dorado_modified_bases_models}" ]; then
+        DORADO_MOD_ARGS=(--modified-bases-models "${dorado_modified_bases_models}")
+    fi
+
     if [ ${filetype} == "bam" ]
     then
         mv ${filtered_bam} filtered_pod5_basecalled.bam
@@ -308,7 +344,7 @@ process rebasecall_filtered_files{
     else
         if [ ${params.sample_type} == "DNA" ]
         then
-            dorado basecaller --estimate-poly-a --emit-moves ${basecalling_model} ${filtered_pod5}\
+            ${dorado_executable} basecaller "\${DORADO_MODELS_ARGS[@]}" --estimate-poly-a --emit-moves ${basecalling_model} ${filtered_pod5}\
             | samtools fastq -T "*" --threads ${params.threads}\
             | minimap2 -t ${params.threads} -y --MD -ax map-ont reference.fasta -\
             | samtools sort --threads ${params.threads}\
@@ -316,7 +352,7 @@ process rebasecall_filtered_files{
             > filtered_pod5_basecalled.bam 
             samtools index filtered_pod5_basecalled.bam -@ ${params.threads}
         else
-            dorado basecaller --device "cuda:0" --estimate-poly-a --emit-moves sup,m6A,pseU ${filtered_pod5}\
+            ${dorado_executable} basecaller --device "cuda:0" --estimate-poly-a --emit-moves "\${DORADO_MOD_ARGS[@]}" ${dorado_rna_model} ${filtered_pod5}\
             | samtools fastq -T "*" --threads ${params.threads}\
             | minimap2 -t ${params.threads} -y --MD -ax map-ont reference.fasta -\
             | samtools sort --threads ${params.threads}\
@@ -343,14 +379,15 @@ process rebasecall_filtered_files{
 
 process extract_polyA_table{
     label 'other_tools'
-    publishDir "${params.out_dir}/taillength_estimation/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/taillength_estimation/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(rebasecalled_bam)
-        path(rebasecalled_bam_bai)
+        tuple val(sample_id), path(rebasecalled_bam), path(rebasecalled_bam_bai)
     output:
-        val 1,emit: done
-        path("tail_estimation.csv"), emit: tail_esimation_csv
+        tuple val(sample_id), path("tail_estimation.csv"), emit: tail_estimation_csv
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/extract_polyA_tails.py -i filtered_pod5_basecalled.bam -o .
     """
@@ -372,26 +409,6 @@ process extract_polyA_table{
 
 
 
-// process fragment_analysis_hdbscan{
-//     label 'other_tools'
-//     publishDir "${params.out_dir}/fragment_analysis_hdbscan/", mode:"copy"
-//     input:
-//         path(filtered_bam)
-//         path(filtered_bam_bai)
-//         path(reference), stageAs: "reference.fasta" 
-//     output:
-//         path("alignment_df.csv"), emit: alignment_df
-//         path("fragment_df.csv"), emit: fragment_df
-//         path("*")
-//         val 1, emit: done
-    
-//     """
-//     python ${projectDir}/bin/fragment_analysis_hdbscan.py -c ${params.threads} -i ${filtered_bam} -r reference.fasta -o ./ -t 0.9 -m 5 -s ${params.color} -d ${params.demand}
-//     python ${projectDir}/bin/visualize_clustering_performance_intensity_matrix.py -a ./alignment_df.csv -t ./fragment_df_simple.csv -c ${params.color} -o ./
-//     """
-// }
-
-
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                                                                                                                                                         // 
 //                                                                                                                                                         //
@@ -408,21 +425,24 @@ process extract_polyA_table{
 
 process fragment_analysis_intensity{
     label 'other_tools'
-    publishDir "${params.out_dir}/fragment_analysis_intensity/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/fragment_analysis_intensity/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(filtered_bam)
-        path(filtered_bam_bai)
+        tuple val(sample_id), path(filtered_bam), path(filtered_bam_bai)
         path(reference), stageAs: "reference.fasta" 
         // val(done)
     output:
-        path("alignment_df.csv"), emit: alignment_df
-        path("fragment_df.csv"), emit: fragment_df
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("alignment_df.csv"), emit: alignment_df
+        tuple val(sample_id), path("fragment_df.csv"), emit: fragment_df
+        tuple val(sample_id), path("fragment_analysis_intensity_matrix.png"), emit: intensity_matrix_png
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/fragment_analysis_intensity.py -c ${params.threads} -i ${filtered_bam} -r reference.fasta -o ./ -t 0.9 -s ${params.color} -d ${params.demand}
     python ${projectDir}/bin/visualize_clustering_performance_intensity_matrix.py -a ./alignment_df.csv -t ./fragment_df_simple.csv -c ${params.color} -o ./
+    cp intensity_matrix.png fragment_analysis_intensity_matrix.png
     """
 }
 
@@ -442,21 +462,21 @@ process fragment_analysis_intensity{
 
 process template_driven_fragment_analysis{
     label 'other_tools'
-    publishDir "${params.out_dir}/template_based_analysis/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/template_based_analysis/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(filtered_bam)
-        path(filtered_bam_bai)
+        tuple val(sample_id), path(filtered_bam), path(filtered_bam_bai), val(done)
         path(reference), stageAs: "reference.fasta" 
         path(templates), stageAs: "template.csv"
-        val(done)
     output:
-        path("template_fragment_df.csv"), emit: template_csv
-        path("template_alignment_df.csv"), emit: template_alignment_csv
-        path("start_sites_fragment_based.bed"), emit: start_sites
-        path("end_sites_fragment_based.bed"), emit: end_sites
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("template_fragment_df.csv"), emit: template_csv
+        tuple val(sample_id), path("template_alignment_df.csv"), emit: template_alignment_csv
+        tuple val(sample_id), path("start_sites_fragment_based.bed"), emit: start_sites
+        tuple val(sample_id), path("end_sites_fragment_based.bed"), emit: end_sites
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/template_driven_fragment_analysis.py -c ${params.threads} -i ${filtered_bam} -r reference.fasta -f template.csv -o ./ -t 0.9 -s ${params.color} -d ${params.demand}
     """
@@ -476,16 +496,16 @@ process template_driven_fragment_analysis{
 
 process fragment_based_readtail_analysis{
     label 'other_tools'
-    publishDir "${params.out_dir}/readtail_analysis/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/readtail_analysis/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(filtered_bam)
-        path(filtered_bam_bai)
-        path(template_csv)
+        tuple val(sample_id), path(filtered_bam), path(filtered_bam_bai), path(template_csv)
         path(fasta_file)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/readtail_analysis.py -i ${filtered_bam} -r ${template_csv} -o ./ -f ${fasta_file}
     """
@@ -505,18 +525,20 @@ process fragment_based_readtail_analysis{
 
 process visualize_polyA_associated_templates{
     label 'other_tools'
-    publishDir "${params.out_dir}/polyA_template_based/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/polyA_template_based/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(template_alignment_csv)
-        path(tail_esimation_csv)
+        tuple val(sample_id), path(template_alignment_csv), path(tail_estimation_csv)
         path(templates)
         path(reference)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("polyA_tails_intermediates_template.html"), path("polyA_tails_intermediates_min_max.html"), path("polyA_tails_intermediates_mean.html"), path("violinplot_taillength_per_intermediate.png"), emit: report_files
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
-    python ${projectDir}/bin/visualize_taillengths.py -a ${template_alignment_csv} -t ${tail_esimation_csv} -c ${params.color} -o ./ -f ${templates} -r ${reference} -m ${params.model_organism}
+    python ${projectDir}/bin/visualize_taillengths.py -a ${template_alignment_csv} -t ${tail_estimation_csv} -c ${params.color} -o ./ -f ${templates} -r ${reference} -m ${params.model_organism}
     """
 }
 
@@ -534,18 +556,20 @@ process visualize_polyA_associated_templates{
 
 process visualize_polyA_associated_intensity_clusters{
     label 'other_tools'
-    publishDir "${params.out_dir}/polyA_intensity_based_clusters/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/polyA_intensity_based_clusters/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(intensity_alignment_csv)
-        path(tail_esimation_csv)
+        tuple val(sample_id), path(intensity_alignment_csv), path(tail_estimation_csv)
         path(templates)
         path(reference)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("polyA_tails_clustering.html"), path("violinplot_taillength_per_cluster.png"), emit: report_files
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
-    python ${projectDir}/bin/visualize_taillengths_clustering.py -a ${intensity_alignment_csv} -t ${tail_esimation_csv} -c ${params.color} -o ./ -f ${templates} -r ${reference} -m ${params.model_organism}
+    python ${projectDir}/bin/visualize_taillengths_clustering.py -a ${intensity_alignment_csv} -t ${tail_estimation_csv} -c ${params.color} -o ./ -f ${templates} -r ${reference} -m ${params.model_organism}
     """
 }
 
@@ -563,23 +587,6 @@ process visualize_polyA_associated_intensity_clusters{
 //                                                                                                                                                         //
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// process visualize_polyA_associated_hdbscan_clusters{
-//     label 'other_tools'
-//     publishDir "${params.out_dir}/polyA_hdbscan_based_clusters/", mode:"copy"
-//     input:
-//         path(hdbscan_alignment_csv)
-//         path(tail_esimation_csv)
-//         path(templates)
-//         path(reference)
-//     output:
-//         path("*")
-//         val 1, emit: done
-//     """
-//     python ${projectDir}/bin/visualize_taillengths_clustering.py -a ${hdbscan_alignment_csv} -t ${tail_esimation_csv} -c ${params.color} -o ./ -f ${templates} -r ${reference} -m ${params.model_organism}
-//     """
-// }
-
-
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -596,14 +603,17 @@ process visualize_polyA_associated_intensity_clusters{
 
 process visualize_intensity_matrix{
     label 'other_tools'
-    publishDir "${params.out_dir}/intensity_matrix/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/intensity_matrix/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(alignment_df)
+        tuple val(sample_id), path(alignment_df)
         path(templates)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("intensity_matrix.png"), path("intensity_matrix.html"), emit: report_files
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/visualize_intensity_matrix.py -a ${alignment_df} -t ${templates} -c ${params.color} -o ./ -m ${params.model_organism}
     """
@@ -623,16 +633,18 @@ process visualize_intensity_matrix{
 
 process visualize_modifications{
     label 'other_tools'
-    publishDir "${params.out_dir}/modification_plots/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/modification_plots/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(rebasecalled_bam)
-        path(rebasecalled_bam_bai)
+        tuple val(sample_id), path(rebasecalled_bam), path(rebasecalled_bam_bai)
         path(reference)
         path(modifications_bed)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("relative_pseU_modification_abundance.html"), path("relative_m6A_modification_abundance.html"), emit: report_files, optional: true
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     if [ ${params.sample_type} == "RNA" ]
     then
@@ -658,15 +670,17 @@ process visualize_modifications{
 
 process visualize_cut_sites{
     label 'other_tools'
-    publishDir "${params.out_dir}/cut_site_plots/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/cut_site_plots/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(start_sites)
-        path(end_sites)
+        tuple val(sample_id), path(start_sites), path(end_sites)
         path(reference)
     output:
-        path("*")
-        val 1, emit: done
+        tuple val(sample_id), path("cut_sites.html"), emit: report_files
+        tuple val(sample_id), path("*"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/visualize_cut_sites.py -s ${start_sites} -e ${end_sites}  -r ${reference} -o ./
     """
@@ -686,15 +700,18 @@ process visualize_cut_sites{
 
 process visualize_reference_coverage{
     label 'other_tools'
-    publishDir "${params.out_dir}/coverage_plots/", mode:"copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/coverage_plots/" }, mode:"copy"
     stageInMode 'symlink'
     input:
-        path(template_alignment_csv)
+        tuple val(sample_id), path(template_alignment_csv)
         path(templates)
         path(reference)
     output:
-        path("*.png")
-        val 1, emit: done
+        tuple val(sample_id), path("coverage_fragments_absolute.png"), path("coverage_fragments_relative.png"), path("coverage_fragments_absolute_all.png"), path("coverage_total_sample_absolute.png"), path("coverage_total_sample_relative.png"), emit: report_files
+        tuple val(sample_id), path("*.png"), emit: all_files
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     python ${projectDir}/bin/visualize_rRNA_coverage.py -a ${template_alignment_csv} -f ${templates}  -r ${reference} -o ./ -c ${params.color} -m ${params.model_organism}
     """
@@ -715,18 +732,14 @@ process visualize_reference_coverage{
 
 process check_all_done {
     label 'other_tools'
-    publishDir "${params.out_dir}/report/", mode: "copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/report/" }, mode: "copy"
     stageInMode 'symlink'
     input:
-        val visualize_intensity_matrix_done;
-        val visualize_polyA_associated_templates;
-        val visualize_polyA_associated_intensity_clusters_done;
-        //val visualize_polyA_associated_hdbscan_clusters_done;
-        val visualize_modifications_done;
-        val visualize_cut_sites_done;
-        val visualize_reference_coverage_done;
+        tuple val(sample_id), val(visualize_intensity_matrix_done), val(visualize_polyA_associated_templates_done), val(visualize_polyA_associated_intensity_clusters_done), val(visualize_modifications_done), val(visualize_cut_sites_done), val(visualize_reference_coverage_done)
     output:
-        val 1, emit: done
+        tuple val(sample_id), val(1), emit: done
+    script:
     """
     echo "All visualizations done"
     """
@@ -746,40 +759,35 @@ process check_all_done {
 
 process create_report {
     label 'other_tools'
-    publishDir "${params.out_dir}/", mode: "copy"
+    tag "$sample_id"
+    publishDir { "${params.out_dir}/${sample_id}/" }, mode: "copy"
     stageInMode 'symlink'
     input:
     // Mandatory inputs
-    val all_done_verification
-    path intensity_matrix_png, stageAs: "intensity_matrix/intensity_matrix.png"
-    path intensity_matrix_html, stageAs: "intensity_matrix/intensity_matrix.html"
-    path polyA_tails_intermediates_template_html, stageAs: "polyA_template_based/polyA_tails_intermediates_template.html"
-    path polyA_tails_intermediates_min_max_html, stageAs: "polyA_template_based/polyA_tails_intermediates_min_max.html"
-    path polyA_tails_intermediates_mean_html, stageAs: "polyA_template_based/polyA_tails_intermediates_mean.html"
-    path violinplot_taillength_per_intermediate_png, stageAs: "polyA_template_based/violinplot_taillength_per_intermediate.png"
-    path cut_sites_html, stageAs: "cut_site_plots/cut_sites.html"
-    path polyA_tails_clustering_html, stageAs: "polyA_intensity_based_clusters/polyA_tails_clustering.html"
-    path intensity_matrix_intensity_clustering, stageAs: "fragment_analysis_intensity/intensity_matrix.png"
-    path violinplot_taillength_per_cluster_png, stageAs: "polyA_intensity_based_clusters/violinplot_taillength_per_cluster.png"
-    // path polyA_tails_hdbscan_clustering_html, stageAs: "polyA_hdbscan_based_clusters/polyA_tails_clustering.html"
-    // path intensity_matrix_hdbscan_clustering, stageAs: "fragment_analysis_hdbscan/intensity_matrix.png"
-    // path violinplot_taillength_per_hdbscan_cluster_png, stageAs: "polyA_hdbscan_based_clusters/violinplot_taillength_per_cluster.png"
-    path coverage_plot_general_absolute, stageAs: "coverage_plots/coverage_fragments_absolute.png"
-    path coverage_plot_general_relative, stageAs: "coverage_plots/coverage_fragments_relative.png"
-    path coverage_plot_fragments_absolute, stageAs:"coverage_plots/coverage_fragments_absolute_all.png"
-    path coverage_plot_fragments_absolute, stageAs:"coverage_plots/coverage_total_sample_absolute.png"
-    path coverage_plot_fragments_relative, stageAs:"coverage_plots/coverage_total_sample_relative.png"
-    
-
-    // Optional inputs
-    path relative_pseU_modification_abundance_html, stageAs: "modification_plots/relative_pseU_modification_abundance.html"
-    path relative_m6A_modification_abundance_html, stageAs: "modification_plots/relative_m6A_modification_abundance.html"
-
+    tuple val(sample_id), val(all_done_verification), path(intensity_matrix_png), path(intensity_matrix_html), path(polyA_tails_intermediates_template_html), path(polyA_tails_intermediates_min_max_html), path(polyA_tails_intermediates_mean_html), path(violinplot_taillength_per_intermediate_png), path(cut_sites_html), path(polyA_tails_clustering_html), path(intensity_matrix_intensity_clustering), path(violinplot_taillength_per_cluster_png), path(coverage_plot_general_absolute), path(coverage_plot_general_relative), path(coverage_plot_fragments_absolute), path(coverage_total_sample_absolute), path(coverage_total_sample_relative), path(relative_pseU_modification_abundance_html), path(relative_m6A_modification_abundance_html)
     output:
-    path("rRNA_report.html")
+    tuple val(sample_id), path("rRNA_report.html"), emit: report
     
     script:
     """
+    mkdir -p intensity_matrix polyA_template_based cut_site_plots polyA_intensity_based_clusters fragment_analysis_intensity coverage_plots modification_plots
+    cp ${intensity_matrix_png} intensity_matrix/intensity_matrix.png
+    cp ${intensity_matrix_html} intensity_matrix/intensity_matrix.html
+    cp ${polyA_tails_intermediates_template_html} polyA_template_based/polyA_tails_intermediates_template.html
+    cp ${polyA_tails_intermediates_min_max_html} polyA_template_based/polyA_tails_intermediates_min_max.html
+    cp ${polyA_tails_intermediates_mean_html} polyA_template_based/polyA_tails_intermediates_mean.html
+    cp ${violinplot_taillength_per_intermediate_png} polyA_template_based/violinplot_taillength_per_intermediate.png
+    cp ${cut_sites_html} cut_site_plots/cut_sites.html
+    cp ${polyA_tails_clustering_html} polyA_intensity_based_clusters/polyA_tails_clustering.html
+    cp ${intensity_matrix_intensity_clustering} fragment_analysis_intensity/intensity_matrix.png
+    cp ${violinplot_taillength_per_cluster_png} polyA_intensity_based_clusters/violinplot_taillength_per_cluster.png
+    cp ${coverage_plot_general_absolute} coverage_plots/coverage_fragments_absolute.png
+    cp ${coverage_plot_general_relative} coverage_plots/coverage_fragments_relative.png
+    cp ${coverage_plot_fragments_absolute} coverage_plots/coverage_fragments_absolute_all.png
+    cp ${coverage_total_sample_absolute} coverage_plots/coverage_total_sample_absolute.png
+    cp ${coverage_total_sample_relative} coverage_plots/coverage_total_sample_relative.png
+    cp ${relative_pseU_modification_abundance_html} modification_plots/relative_pseU_modification_abundance.html
+    cp ${relative_m6A_modification_abundance_html} modification_plots/relative_m6A_modification_abundance.html
     python ${projectDir}/bin/html_report.py -d ./ -o ./
     """
 }
@@ -787,147 +795,215 @@ process create_report {
 
 
 workflow{
+    println "Seqfolder"
+    println params.sample_folder
+    println ""
+    println "Color"
+    println params.color
+    println ""
+    println "Script folder"
+    println params.script_folder
+    println ""
+    println "Output folder"
+    println params.out_dir
+    println ""
+    println "Basecalling model"
+    println params.basecalling_model
+    println ""
+    println "Threads"
+    println params.threads
+    println ""
+    println "Sample type"
+    println params.sample_type
+    println ""
+    println "Demand"
+    println params.demand
+    println ""
+    println "Model Organism"
+    println params.model_organism
+    println ""
+    println "Demultiplex samples"
+    println(params.demultiplex ?: false)
+    println ""
+    println "Selected barcodes"
+    println(params.get('barcodes') ?: "all detected barcodes")
+    println ""
+
     if (params.model_organism == "Human"){
         fasta_reference_file = "${projectDir}/references/RNA45SN1.fasta"
         ribosomal_intermediates_file = "${projectDir}/references/Literature_Fragments_and_cut_sites_RNA45SN1.csv"
         modification_reference_file = "${projectDir}/references/rRNA_modifications_conv.bed"
-        println fasta_reference_file
-        println ribosomal_intermediates_file
-        println modification_reference_file
     } else if (params.model_organism == "Yeast"){
         fasta_reference_file = "${projectDir}/references/RDN37-1.fa"
         ribosomal_intermediates_file = "${projectDir}/references/Literature_Fragments_and_cut_sites_RDN37-1.csv"
         modification_reference_file = "${projectDir}/references/rRNA_yeast_modifications_conv.bed"
-        println fasta_reference_file
-        println ribosomal_intermediates_file
-        println modification_reference_file
+    } else {
+        error "Unsupported model_organism: ${params.model_organism}. Use Human or Yeast."
     }
 
-    def sample_dir = file(params.sample_folder)
+    println fasta_reference_file
+    println ribosomal_intermediates_file
+    println modification_reference_file
 
-    def filetype = sample_dir.listFiles().any { it.name.endsWith('.pod5') }  ? 'pod5' : sample_dir.listFiles().any { it.name.endsWith('.fast5') } ? 'fast5' : sample_dir.listFiles().any { it.name.endsWith('bam') } ? 'bam' : null
+    def sample_dir = file(params.sample_folder)
+    def filetype = sample_dir.listFiles().any { entry -> entry.name.endsWith('.pod5') } ? 'pod5' :
+                   sample_dir.listFiles().any { entry -> entry.name.endsWith('.fast5') } ? 'fast5' :
+                   sample_dir.listFiles().any { entry -> entry.name.endsWith('.bam') } ? 'bam' : null
+    if (!filetype) {
+        error "No POD5, FAST5 or BAM input found in ${params.sample_folder}"
+    }
+
+    def preprocessing_method = (params.preprocessing_method ?: 'porechop').toString().trim().toLowerCase()
+    if (!['porechop', 'barbell'].contains(preprocessing_method)) {
+        error "Unsupported preprocessing_method: ${preprocessing_method}. Use porechop or barbell."
+    }
+
+    def demultiplex_enabled = params.demultiplex != null && params.demultiplex.toString().toBoolean()
+    if (preprocessing_method == 'porechop' && demultiplex_enabled) {
+        error "demultiplex=true requires preprocessing_method=barbell"
+    }
+
+    def selected_barcodes = params.get('barcodes') ?: []
+    if (selected_barcodes instanceof String) {
+        selected_barcodes = selected_barcodes.split(',')*.trim().findAll { barcode -> barcode }
+    }
 
     dorado_basecalling(
-        "${params.sample_folder}", 
-        "${params.basecalling_model}"
+        file(params.sample_folder),
+        params.basecalling_model
+    )
+
+
+    if (preprocessing_method == 'barbell') {
+        trim_barcodes(
+            dorado_basecalling.out.fastq_not_trimmed,
+            file(params.containsKey('barbell_barcode_fasta') && params.barbell_barcode_fasta ? params.barbell_barcode_fasta : "${projectDir}/data/DRB004_RNA01-12.fasta"),
+            file(params.containsKey('barbell_filters') && params.barbell_filters ? params.barbell_filters : "${projectDir}/data/barbell_DRB004_filters.txt"),
+            demultiplex_enabled
         )
-    trim_barcodes(
-        dorado_basecalling.out.fastq_not_trimmed
+
+        if (demultiplex_enabled) {
+            sample_fastqs = trim_barcodes.out.demultiplexed_fastqs
+                .flatten()
+                .map { fastq ->
+                    def sample_id = fastq.name
+                        .replaceFirst(/\.fastq\.gz$/, '')
+                        .replaceFirst(/_(fw|rc)\.trimmed$/, '')
+                        .replaceFirst(/\.trimmed$/, '')
+                    tuple(sample_id, fastq)
+                }
+
+            if (selected_barcodes) {
+                sample_fastqs = sample_fastqs.filter { sample_id, _fastq ->
+                    selected_barcodes.contains(sample_id)
+                }
+            }
+        } else {
+            def sample_name = params.sample_name ?: 'sample'
+            sample_fastqs = trim_barcodes.out.combined_fastq.map { fastq ->
+                tuple(sample_name, fastq)
+            }
+        }
+    } else {
+        porechop_trimming(
+            dorado_basecalling.out.fastq_not_trimmed
         )
-    align_to_45SN1(
-        trim_barcodes.out.basecalled_fastq, 
-        file(fasta_reference_file)
-        )
+
+        def sample_name = params.sample_name ?: 'sample'
+        sample_fastqs = porechop_trimming.out.basecalled_fastq.map { fastq ->
+            tuple(sample_name, fastq)
+        }
+    }
+
+    sample_fastqs = sample_fastqs
+        .ifEmpty { error "No FASTQ files were produced using ${preprocessing_method}; requested samples: ${selected_barcodes ?: 'all'}" }
+        .view { sample_id, fastq -> "NanoRibolyzer sample [${preprocessing_method}]: ${sample_id} (${fastq.name})" }
+
+    align_to_45SN1(sample_fastqs, file(fasta_reference_file))
+
     filter_pod5_for_RNA45s_aligning_reads(
-        align_to_45SN1.out.filtered_bam, 
-        align_to_45SN1.out.filtered_bai, 
-        "${params.sample_folder}", 
+        align_to_45SN1.out.aligned_bam,
+        file(params.sample_folder),
         dorado_basecalling.out.converted_pod5
-        )
+    )
+
     rebasecall_filtered_files(
-        filter_pod5_for_RNA45s_aligning_reads.out.filtered_pod5, 
-        filter_pod5_for_RNA45s_aligning_reads.out.filtered_bam, 
-        file(fasta_reference_file), 
-        "${params.basecalling_model}",
-        "${filetype}"
-        )
-    extract_polyA_table(
-        rebasecall_filtered_files.out.rebasecalled_bam, 
-        rebasecall_filtered_files.out.rebasecalled_bam_bai
-        )
-    // fragment_analysis_hdbscan(
-    //     rebasecall_filtered_files.out.rebasecalled_bam, 
-    //     rebasecall_filtered_files.out.rebasecalled_bam_bai,
-    //     file(fasta_reference_file)
-    //     )
-    fragment_analysis_intensity(
-        rebasecall_filtered_files.out.rebasecalled_bam, 
-        rebasecall_filtered_files.out.rebasecalled_bam_bai,
+        filter_pod5_for_RNA45s_aligning_reads.out.filtered_reads,
         file(fasta_reference_file),
-        // fragment_analysis_hdbscan.out.done
-        )
-    template_driven_fragment_analysis(
-        rebasecall_filtered_files.out.rebasecalled_bam, 
-        rebasecall_filtered_files.out.rebasecalled_bam_bai,
-        file(fasta_reference_file), 
-        file(ribosomal_intermediates_file),
-        fragment_analysis_intensity.out.done
-        )
-    fragment_based_readtail_analysis(
-        rebasecall_filtered_files.out.rebasecalled_bam,
-        rebasecall_filtered_files.out.rebasecalled_bam_bai,
-        template_driven_fragment_analysis.out.template_csv,
+        params.basecalling_model,
+        filetype
+    )
+
+    extract_polyA_table(rebasecall_filtered_files.out.rebasecalled)
+    fragment_analysis_intensity(
+        rebasecall_filtered_files.out.rebasecalled,
         file(fasta_reference_file)
-        )
+    )
+
+    template_analysis_input = rebasecall_filtered_files.out.rebasecalled
+        .join(fragment_analysis_intensity.out.done)
+    template_driven_fragment_analysis(
+        template_analysis_input,
+        file(fasta_reference_file),
+        file(ribosomal_intermediates_file)
+    )
+
+    readtail_input = rebasecall_filtered_files.out.rebasecalled
+        .join(template_driven_fragment_analysis.out.template_csv)
+    fragment_based_readtail_analysis(readtail_input, file(fasta_reference_file))
+
     visualize_intensity_matrix(
         template_driven_fragment_analysis.out.template_alignment_csv,
         file(ribosomal_intermediates_file)
-        )
+    )
+
+    polyA_template_input = template_driven_fragment_analysis.out.template_alignment_csv
+        .join(extract_polyA_table.out.tail_estimation_csv)
     visualize_polyA_associated_templates(
-        template_driven_fragment_analysis.out.template_alignment_csv,
-        extract_polyA_table.out.tail_esimation_csv,file(ribosomal_intermediates_file),
-        file(fasta_reference_file)
-        )
-    visualize_polyA_associated_intensity_clusters(
-        fragment_analysis_intensity.out.fragment_df,
-        extract_polyA_table.out.tail_esimation_csv,
+        polyA_template_input,
         file(ribosomal_intermediates_file),
         file(fasta_reference_file)
-        )
-    // visualize_polyA_associated_hdbscan_clusters(
-    //     fragment_analysis_hdbscan.out.fragment_df,
-    //     extract_polyA_table.out.tail_esimation_csv,
-    //     file(ribosomal_intermediates_file),
-    //     file(fasta_reference_file)
-    //     )
+    )
+
+    polyA_intensity_input = fragment_analysis_intensity.out.fragment_df
+        .join(extract_polyA_table.out.tail_estimation_csv)
+    visualize_polyA_associated_intensity_clusters(
+        polyA_intensity_input,
+        file(ribosomal_intermediates_file),
+        file(fasta_reference_file)
+    )
+
     visualize_modifications(
-        rebasecall_filtered_files.out.rebasecalled_bam,
-        rebasecall_filtered_files.out.rebasecalled_bam_bai,
+        rebasecall_filtered_files.out.rebasecalled,
         file(fasta_reference_file),
         file(modification_reference_file)
-        )
-    visualize_cut_sites(
-        template_driven_fragment_analysis.out.start_sites,
-        template_driven_fragment_analysis.out.end_sites,
-        file(fasta_reference_file)
-        )
+    )
+
+    cut_sites_input = template_driven_fragment_analysis.out.start_sites
+        .join(template_driven_fragment_analysis.out.end_sites)
+    visualize_cut_sites(cut_sites_input, file(fasta_reference_file))
+
     visualize_reference_coverage(
         template_driven_fragment_analysis.out.template_alignment_csv,
         file(ribosomal_intermediates_file),
         file(fasta_reference_file)
     )
-    check_all_done(
-        visualize_intensity_matrix.out.done,
-        visualize_polyA_associated_templates.out.done,
-        visualize_polyA_associated_intensity_clusters.out.done,
-        // visualize_polyA_associated_hdbscan_clusters.out.done, 
-        visualize_modifications.out.done, 
-        visualize_cut_sites.out.done,
-        visualize_reference_coverage.out.done
-        )
-    create_report(
-            check_all_done.out.done,
-            file("${params.out_dir}/intensity_matrix/intensity_matrix.png"),
-            file("${params.out_dir}/intensity_matrix/intensity_matrix.html"),
-            file("${params.out_dir}/polyA_template_based/polyA_tails_intermediates_template.html"),
-            file("${params.out_dir}/polyA_template_based/polyA_tails_intermediates_min_max.html"),
-            file("${params.out_dir}/polyA_template_based/polyA_tails_intermediates_mean.html"),
-            file("${params.out_dir}/polyA_template_based/violinplot_taillength_per_intermediate.png"),
-            file("${params.out_dir}/cut_site_plots/cut_sites.html"),
-            file("${params.out_dir}/polyA_intensity_based_clusters/polyA_tails_clustering.html"),
-            file("${params.out_dir}/fragment_analysis_intensity/intensity_matrix.png"),
-            file("${params.out_dir}/polyA_intensity_based_clusters/violinplot_taillength_per_cluster.png"),
-            // file("${params.out_dir}/polyA_hdbscan_based_clusters/polyA_tails_clustering.html"),
-            // file("${params.out_dir}/fragment_analysis_hdbscan/intensity_matrix.png"),
-            // file("${params.out_dir}/polyA_hdbscan_based_clusters/violinplot_taillength_per_cluster.png"),
-            file("${params.out_dir}/coverage_plots/coverage_fragments_absolute.png"),
-            file("${params.out_dir}/coverage_plots/coverage_fragments_relative.png"),
-            file("${params.out_dir}/coverage_plots/coverage_fragments_absolute_all.png"),
-            file("${params.out_dir}/coverage_plots/coverage_total_sample_absolute.png"),
-            file("${params.out_dir}/coverage_plots/coverage_total_sample_relative.png"),
-            file("${params.out_dir}/modification_plots/relative_pseU_modification_abundance.html"),
-            file("${params.out_dir}/modification_plots/relative_m6A_modification_abundance.html")  
-    )
+
+    all_visualizations_done = visualize_intensity_matrix.out.done
+        .join(visualize_polyA_associated_templates.out.done)
+        .join(visualize_polyA_associated_intensity_clusters.out.done)
+        .join(visualize_modifications.out.done)
+        .join(visualize_cut_sites.out.done)
+        .join(visualize_reference_coverage.out.done)
+    check_all_done(all_visualizations_done)
+
+    report_inputs = check_all_done.out.done
+        .join(visualize_intensity_matrix.out.report_files)
+        .join(visualize_polyA_associated_templates.out.report_files)
+        .join(visualize_cut_sites.out.report_files)
+        .join(visualize_polyA_associated_intensity_clusters.out.report_files)
+        .join(fragment_analysis_intensity.out.intensity_matrix_png)
+        .join(visualize_reference_coverage.out.report_files)
+        .join(visualize_modifications.out.report_files)
+    create_report(report_inputs)
 }
-
-

@@ -94,7 +94,25 @@ model_organism: Human (Yeast)
 threads: 8
 sample_type: RNA (DNA)
 demand: low (high)
+preprocessing_method: porechop # porechop or barbell
+demultiplex: false # true requires barbell
+sample_name: sample # used when demultiplex is false
+# Optional with Barbell:
+# barbell_barcode_fasta: /path/to/barcodes.fasta
+# barbell_filters: /path/to/barbell_filters.txt
+# barcodes:
+#   - RNA01
+#   - RNA02
+# Optional local Dorado settings:
+# dorado_executable: /path/to/dorado
+# dorado_models_directory: /path/to/dorado_models
+# dorado_rna_model: /path/to/base_model
+# dorado_modified_bases_models: /path/to/model1,/path/to/model2
 ```
+
+`preprocessing_method` selects Porechop or Barbell 0.3.3. Porechop processes all reads as one sample. With Barbell, `demultiplex: true` runs NanoRibolyzer separately for every detected barcode. The optional `barcodes` list restricts the analysis to selected labels; if omitted, all detected labels are processed.
+
+The Dorado parameters are optional and only needed for a local Dorado installation or local model files.
 
 Once the yaml file is established you can run the pipeline with nextflow:
 
@@ -115,7 +133,7 @@ Test data for the workflow is stored in the folder "data" within this repository
 ## Methods
 ![General Pipeline](./figures/General_Pipeline.png)
 
-The analysis workflow of NanoRibolyzer starts with the pod5 output format of ONT’s MinKnow. Reads are basecalled using dorado [basecaller](https://github.com/nanoporetech/dorado). All sequenced reads are basecalled and trimmed with [Porechop](https://github.com/rrwick/Porechop). The trimmed reads become aligned with the map-ont flag of [minimap2](https://github.com/lh3/minimap2) to the 45SN1 reference of [hg38](https://www.gencodegenes.org/human/). The ids of reads aligning to 45SN1 are used to filter the original pod5 file. The filtered pod5 file is rebasecalled using the integrated models for modification detection and polyA taillength of dorado. The read ids in the resulting unaligned bam file is used to collect metainformation about reads on a single nucleotide resolution. 
+The analysis workflow of NanoRibolyzer starts with the pod5 output format of ONT’s MinKnow. Reads are basecalled using dorado [basecaller](https://github.com/nanoporetech/dorado). All sequenced reads are basecalled and then preprocessed with either [Porechop](https://github.com/rrwick/Porechop) or Barbell. Barbell can additionally demultiplex tagged reads so that every barcode is analyzed separately by the downstream workflow. The trimmed reads become aligned with the map-ont flag of [minimap2](https://github.com/lh3/minimap2) to the 45SN1 reference of [hg38](https://www.gencodegenes.org/human/). The ids of reads aligning to 45SN1 are used to filter the original pod5 file. The filtered pod5 file is rebasecalled using the integrated models for modification detection and polyA taillength of dorado. The read ids in the resulting unaligned bam file is used to collect metainformation about reads on a single nucleotide resolution.
 Rebasecalled reads become aligned to the 45SN1 reference. Resulting bam files are used to perform several clustering algorithms. The pipeline includes a template-based and template-free clustering approaches.  
 
 ### Template-based fragment association

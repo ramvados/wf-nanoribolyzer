@@ -23,38 +23,62 @@
                 "color": {
                     "title": "Colorscheme",
                     "type": "string",
-                    "enum":["red","blue","green","orange","purple"],
+                    "enum": [
+                        "red",
+                        "blue",
+                        "green",
+                        "orange",
+                        "purple"
+                    ],
                     "description": "Select a color for the html report and the plots",
                     "help_text": ""
                 },
                 "model_organism": {
                     "title": "Define the model organism of the experiment",
                     "type": "string",
-                    "enum": ["Human","Yeast"],
+                    "enum": [
+                        "Human",
+                        "Yeast"
+                    ],
                     "description": "Human or Yeast are available for now.",
                     "help_text": "Human (Homo sapiens) and Yeast (Saccharomyces cerevisiae) are currently integrated model organisms. We are working on the integration of further organisms."
                 },
                 "basecalling_model": {
                     "title": "Basecalling Model",
                     "type": "string",
-                    "enum": ["fast","hac","sup"], 
+                    "enum": [
+                        "fast",
+                        "hac",
+                        "sup"
+                    ],
                     "description": "Select the accuracy of the basecalleing model fast,hac or sup",
                     "help_text": ""
                 },
                 "threads": {
                     "tile": "Threads",
                     "type": "integer",
-                    "enum": [1,2,3,4,5,6,7,8],
+                    "enum": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8
+                    ],
                     "description": "How many cores to use ?",
                     "help_text": "Define the number of CPU cores to use",
                     "minimum": 1,
                     "maximum": 8
-
                 },
                 "sample_type": {
                     "title": "Sample type",
                     "type": "string",
-                    "enum": ["DNA","RNA"],
+                    "enum": [
+                        "DNA",
+                        "RNA"
+                    ],
                     "description": "RNA or DNA?",
                     "help_text": "provide information whether DNA or RNA is used"
                 },
@@ -66,11 +90,57 @@
                     "help_text": "Define an output directory on your system."
                 },
                 "demand": {
-                    "title":"Demand",
+                    "title": "Demand",
                     "type": "string",
-                    "enum": ["high","low"],
+                    "enum": [
+                        "high",
+                        "low"
+                    ],
                     "description": "Demand high or low computational ressources",
                     "help_text": "Define high or low to select. For big datasets the runtime can be very high when using high. You will obtain a computed consensus sequence of clustered reads, when using high demand."
+                },
+                "preprocessing_method": {
+                    "title": "Read preprocessing",
+                    "type": "string",
+                    "enum": [
+                        "porechop",
+                        "barbell"
+                    ],
+                    "default": "porechop",
+                    "description": "Select Porechop or Barbell preprocessing."
+                },
+                "demultiplex": {
+                    "title": "Demultiplex Barbell samples",
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Run downstream analysis separately for each Barbell barcode."
+                },
+                "sample_name": {
+                    "title": "Sample name",
+                    "type": "string",
+                    "default": "sample",
+                    "description": "Output sample name when demultiplexing is disabled."
+                },
+                "barcodes": {
+                    "title": "Selected Barbell barcodes",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "uniqueItems": true,
+                    "description": "Optional barcode labels to analyze. If omitted, all detected labels are used."
+                },
+                "barbell_barcode_fasta": {
+                    "title": "Barbell barcode FASTA",
+                    "type": "string",
+                    "format": "path",
+                    "description": "Optional custom barcode FASTA. The included DRB004 RNA01-12 file is used by default."
+                },
+                "barbell_filters": {
+                    "title": "Barbell filter file",
+                    "type": "string",
+                    "format": "path",
+                    "description": "Optional custom Barbell filter file."
                 }
             },
             "oneOf": [
@@ -87,7 +157,31 @@
             "fa_icon": "far fa-question-circle",
             "description": "Advanced options for configuring processes inside the workflow.",
             "help_text": "These advanced options do not need to be changed for typical use, but allow fine tuning of workflows for users who want more control over the workflow.",
-            "properties": {}
+            "properties": {
+                "dorado_executable": {
+                    "title": "Dorado executable",
+                    "type": "string",
+                    "default": "dorado",
+                    "description": "Dorado command or path to a local Dorado executable."
+                },
+                "dorado_models_directory": {
+                    "title": "Dorado models directory",
+                    "type": "string",
+                    "format": "path",
+                    "description": "Optional local Dorado models directory."
+                },
+                "dorado_rna_model": {
+                    "title": "Dorado RNA model",
+                    "type": "string",
+                    "default": "sup,m6A,pseU",
+                    "description": "RNA basecalling model name or local model path."
+                },
+                "dorado_modified_bases_models": {
+                    "title": "Dorado modified-base models",
+                    "type": "string",
+                    "description": "Optional comma-separated local modified-base model paths."
+                }
+            }
         },
         "misc": {
             "title": "Miscellaneous Options",
@@ -158,6 +252,6 @@
             "memory": "64GB"
         },
         "run_time": "~10 hours per sample, highly dependent on dataset size",
-        "arm_support": true 
+        "arm_support": true
     }
 }
