@@ -20,6 +20,8 @@ python3 "$repo_dir/containers/prepare_dorado212.py" \
 cd "$build_dir/prepared"
 singularity build "$build_dir/dorado212_nanoribolyzer.sif" \
     "$repo_dir/containers/dorado212.def"
+singularity exec --cleanenv "$build_dir/dorado212_nanoribolyzer.sif" \
+    bash -e -c 'dorado --version; command -v samtools; command -v minimap2; command -v pod5'
 ```
 
 Preparation fixes cuDNN links in a separate copy, preserving the source.
@@ -37,6 +39,45 @@ with `containerOptions = '--nv'` for GPU access.
 Bind local model directories if required; models are not included.
 Remove any site-specific container override for this label when using
 `dorado_container`. Keep your SLURM resource settings.
+
+### GPU and model example
+
+The version check above should report Dorado 2.1.2.
+It checks startup and helper availability; the workflow validation below
+also exercised GPU basecalling.
+
+The following paths are examples. Replace them with your actual paths.
+Example model settings matching the RNA004 models used in validation:
+
+```yaml
+dorado_models_directory: /path/to/dorado_models
+dorado_rna_model: /path/to/dorado_models/rna004_sup@v6.0.0
+dorado_modified_bases_models: /path/to/dorado_models/rna004_sup@v6.0.0_inosine_m6A_2OmeA@v1,/path/to/dorado_models/rna004_sup@v6.0.0_pseU_2OmeU@v1
+```
+
+Download models before running on compute nodes without internet access.
+The model directory must be accessible on the compute nodes.
+
+Add this block to your existing site configuration, replacing both
+model-directory paths:
+
+```groovy
+process {
+    withLabel:dorado_basecaller {
+        containerOptions = '--nv --bind /path/to/dorado_models:/path/to/dorado_models'
+    }
+}
+```
+
+Keep your executor, queue, account and resource settings.
+Remove any old Dorado host-PATH export from this label's beforeScript.
+Load your site's Apptainer and Nextflow modules before launching.
+Use `-profile singularity`, `-c` with your site configuration and
+`-params-file` with your completed YAML.
+
+For Barbell demultiplexing, set `preprocessing_method: barbell`,
+`demultiplex: true`, and optionally select `barcodes` in the YAML.
+See `references/config_template.yaml` for the remaining parameters.
 
 ## Validation
 

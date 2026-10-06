@@ -22,8 +22,11 @@ sample_name: sample
 #   - RNA01
 #   - RNA02
 
-# Optional settings for a local Dorado installation:
-# dorado_executable: /path/to/dorado
+# Optional Dorado settings; see containers/README.md for GPU configuration:
+# dorado_container: /path/to/dorado212_nanoribolyzer.sif
+# Executable inside the custom Dorado 2.1.2 image:
+# dorado_executable: /opt/dorado-2.1.2-linux-x64/bin/dorado
+# For a local installation, use its executable path instead.
 # dorado_models_directory: /path/to/dorado_models
 # dorado_rna_model: /path/to/base_model
 # dorado_modified_bases_models: /path/to/model1,/path/to/model2
