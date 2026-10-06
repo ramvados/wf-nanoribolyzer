@@ -136,3 +136,49 @@ Alpha 0.2 increases absolute rRNA yield but also changes pattern
 selection. Correct assignment of the additional reads has not been
 independently validated. The workflow retains the Barbell default
 alpha 0.4; alpha 0.2 remains an experimental setting.
+
+## Comparison with original Dorado demultiplexing
+
+Reference: Dorado 2.1.0 demultiplexing of the
+20260709_DRS_Yeast_12bc run using SQK-DRB004-24.
+This is an algorithmic comparison reference, not experimental ground truth.
+The comparison used the same previously basecalled FASTQ for both alpha
+settings; it does not compare Dorado software versions.
+
+Both summary barcode fields agreed with all 151,779 barcode01/barcode02
+BAM read IDs. All 1,107,032 test-input read IDs were present in the summary.
+Of these, 82,509 were assigned to barcode01 and 62,984 to barcode02.
+
+### Right-filter output
+
+| Dorado reference group | Alpha 0.4 | Alpha 0.2 |
+|---|---:|---:|
+| barcode01, assigned by Barbell to RNA01 | 75,302 | 74,360 |
+| barcode02, assigned by Barbell to RNA02 | 50,164 | 51,645 |
+| Other Dorado barcodes | 10 | 16 |
+| Dorado unclassified | 17,652 | 227,820 |
+| Total retained read IDs | 143,128 | 353,841 |
+
+No RNA01/RNA02 assignment disagreements were observed among reads
+assigned to barcode01 or barcode02 by Dorado.
+Of the 217,337 additional alpha-0.2 filter reads, 211,125 (97.1%)
+were Dorado-unclassified. Seven additional reads had conflicting
+assignments against other Dorado barcodes.
+
+### After trimming and rRNA alignment
+
+| rRNA-mapped reads | Alpha 0.4 | Alpha 0.2 |
+|---|---:|---:|
+| Concordant barcode01/barcode02 assignments | 6,477 | 6,729 |
+| Dorado unclassified | 83 | 5,724 |
+| Total | 6,560 | 12,453 |
+
+Alpha 0.2 gained 871 concordantly assigned rRNA reads and lost 619,
+a net gain of 252. It also gained 5,645 Dorado-unclassified rRNA
+reads and lost four. Their rRNA alignment does not independently
+validate their barcode assignments.
+
+Alpha 0.4 remains the default. Alpha 0.2 remains experimental:
+it increases candidate yield, but most additional assignments lack
+independent confirmation, and additional annotation patterns cause
+the current filter to reject some previously retained reads.
