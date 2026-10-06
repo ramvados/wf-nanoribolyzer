@@ -180,6 +180,12 @@
                     "title": "Dorado modified-base models",
                     "type": "string",
                     "description": "Optional comma-separated local modified-base model paths."
+                },
+                "dorado_container": {
+                    "title": "Dorado container",
+                    "type": "string",
+                    "default": "ontresearch/dorado:sha58b978562389bd0f1842601fb83cdf1eb2920218",
+                    "description": "Container image for Dorado processes. With the singularity profile, a local SIF path can be supplied."
                 }
             }
         },

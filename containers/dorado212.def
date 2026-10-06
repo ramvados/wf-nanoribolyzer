@@ -1,0 +1,14 @@
+Bootstrap: docker
+From: nanoporetech/dorado@sha256:832c995858ac5418f4357d87c31faf8259e4dba45201c78216704baa05d651c6
+
+%files
+    dorado-2.1.2-linux-x64 /opt/dorado-2.1.2-linux-x64
+
+%environment
+    export PATH=/opt/dorado-2.1.2-linux-x64/bin:$PATH
+
+%test
+    /opt/dorado-2.1.2-linux-x64/bin/dorado --version
+    command -v samtools
+    command -v minimap2
+    command -v pod5

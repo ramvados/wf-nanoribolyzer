@@ -306,3 +306,7 @@ tar -xvf /path/to/filename.tar.gz
 Whenever you use our software or you build up on our work and ideas cite the following paper:
 
 Pastore, S., Wacheul, L., Lehmann, L. et al. Mapping human pre-rRNA processing and modification at single nucleotide resolution using long read nanopore sequencing. Nat Commun (2026). https://doi.org/10.1038/s41467-026-71164-x
+
+### Custom Dorado container
+
+[Dorado 2.1.2 container instructions](containers/README.md)
