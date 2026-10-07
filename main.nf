@@ -156,6 +156,8 @@ process retain_barbell_reads {
         path(trimmed_directory), stageAs: "barbell_trimmed"
         path(filter_table), stageAs: "filtered.tsv"
         path(fallback_script), stageAs: "barbell_fallback.py"
+        path(context_barcode_fasta), stageAs: "context_barcodes.fasta"
+        val(trim_fallback_context)
 
     output:
         path("basecalled.fastq.gz"), emit: combined_fastq
@@ -175,7 +177,9 @@ process retain_barbell_reads {
         --trimmed barbell_trimmed \
         --filtered filtered.tsv \
         --output samples/unassigned.fastq.gz \
-        --counts retention_counts.tsv
+        --counts retention_counts.tsv \
+        --barcode-fasta context_barcodes.fasta \
+        ${trim_fallback_context ? '--trim-context' : ''}
 
     if awk -F '\\t' '\$1 == "fallback_raw" && \$2 == 0 { found=1 } END { exit !found }' retention_counts.tsv; then
         rm samples/unassigned.fastq.gz
@@ -921,7 +925,11 @@ workflow{
             dorado_basecalling.out.fastq_not_trimmed,
             trim_barcodes.out.trimmed_directory,
             trim_barcodes.out.filter_table,
-            file("${projectDir}/bin/barbell_fallback.py")
+            file("${projectDir}/bin/barbell_fallback.py"),
+            file(params.containsKey('barbell_barcode_fasta') && params.barbell_barcode_fasta ? params.barbell_barcode_fasta : "${projectDir}/data/DRB004_RNA01-12.fasta"),
+            params.containsKey('barbell_trim_fallback_context') && params.barbell_trim_fallback_context != null
+                ? params.barbell_trim_fallback_context.toString().toBoolean()
+                : false
         )
 
         if (demultiplex_enabled) {

@@ -312,3 +312,7 @@ Pastore, S., Wacheul, L., Lehmann, L. et al. Mapping human pre-rRNA processing a
 ### Custom Dorado container
 
 [Dorado 2.1.2 container instructions](containers/README.md)
+
+### Experimental fallback context trimming
+
+Optional DRB004 fallback trimming can be enabled with `barbell_trim_fallback_context: true`. It is disabled by default and does not assign barcodes. See [rules, validation and limitations](data/barbell_retention.md#experimental-fallback-context-trimming).

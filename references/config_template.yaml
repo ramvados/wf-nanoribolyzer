@@ -30,3 +30,7 @@ sample_name: sample
 # dorado_models_directory: /path/to/dorado_models
 # dorado_rna_model: /path/to/base_model
 # dorado_modified_bases_models: /path/to/model1,/path/to/model2
+
+# Experimental DRB004 context trimming of fallback reads.
+# Reads remain unassigned; disabled by default.
+# barbell_trim_fallback_context: false

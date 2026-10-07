@@ -136,6 +136,12 @@
                     "format": "path",
                     "description": "Optional custom barcode FASTA. The included DRB004 RNA01-12 file is used by default."
                 },
+                "barbell_trim_fallback_context": {
+                    "title": "Experimental DRB004 fallback trimming",
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Trim fallback reads before a unique exact DRB004 flank and 18-base barcode prefix, requiring at least 10 preceding A bases and at most 250 bases to the read end. Does not assign barcodes."
+                },
                 "barbell_filters": {
                     "title": "Barbell filter file",
                     "type": "string",
