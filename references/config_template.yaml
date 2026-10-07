@@ -9,7 +9,7 @@ sample_type: RNA
 demand: low
 
 # Available methods: porechop or barbell
-preprocessing_method: porechop
+preprocessing_method: barbell
 
 # Barbell can process samples separately. Porechop requires false.
 demultiplex: false

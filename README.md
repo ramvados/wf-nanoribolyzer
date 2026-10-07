@@ -94,7 +94,7 @@ model_organism: Human (Yeast)
 threads: 8
 sample_type: RNA (DNA)
 demand: low (high)
-preprocessing_method: porechop # porechop or barbell
+preprocessing_method: barbell # default; porechop remains available
 demultiplex: false # true requires barbell
 sample_name: sample # used when demultiplex is false
 # Optional with Barbell:
@@ -110,7 +110,9 @@ sample_name: sample # used when demultiplex is false
 # dorado_modified_bases_models: /path/to/model1,/path/to/model2
 ```
 
-`preprocessing_method` selects Porechop or Barbell 0.3.3. Porechop processes all reads as one sample. With Barbell, `demultiplex: true` runs NanoRibolyzer separately for every detected barcode. The optional `barcodes` list restricts the analysis to selected labels; if omitted, all detected labels are processed.
+`preprocessing_method` defaults to Barbell 0.3.3 with raw-read retention. Barbell-trimmed reads keep their barcode assignments; reads absent from the trimmed output are retained unchanged. With `demultiplex: true`, barcode groups are analyzed separately and fallback reads form an additional `unassigned` group. The optional `barcodes` list selects barcode groups; `unassigned` is retained independently of that selection. With `demultiplex: false`, all trimmed and fallback reads are combined as one sample. Porechop remains available by explicitly selecting `preprocessing_method: porechop` with `demultiplex: false`.
+
+Fallback reads may still contain adapters or barcodes. The included barcode templates and validation cover the tested RNA004/DRB004 yeast dataset; other library preparations require suitable templates and validation. See [read-retention validation](data/barbell_retention.md).
 
 The Dorado parameters are optional and only needed for a local Dorado installation or local model files.
 
@@ -133,7 +135,7 @@ Test data for the workflow is stored in the folder "data" within this repository
 ## Methods
 ![General Pipeline](./figures/General_Pipeline.png)
 
-The analysis workflow of NanoRibolyzer starts with the pod5 output format of ONT’s MinKnow. Reads are basecalled using dorado [basecaller](https://github.com/nanoporetech/dorado). All sequenced reads are basecalled and then preprocessed with either [Porechop](https://github.com/rrwick/Porechop) or Barbell. Barbell can additionally demultiplex tagged reads so that every barcode is analyzed separately by the downstream workflow. The trimmed reads become aligned with the map-ont flag of [minimap2](https://github.com/lh3/minimap2) to the 45SN1 reference of [hg38](https://www.gencodegenes.org/human/). The ids of reads aligning to 45SN1 are used to filter the original pod5 file. The filtered pod5 file is rebasecalled using the integrated models for modification detection and polyA taillength of dorado. The read ids in the resulting unaligned bam file is used to collect metainformation about reads on a single nucleotide resolution.
+The analysis workflow of NanoRibolyzer starts with the pod5 output format of ONT’s MinKnow. Reads are basecalled using dorado [basecaller](https://github.com/nanoporetech/dorado). All sequenced reads are basecalled and then preprocessed with Barbell and raw-read retention by default, or optionally with [Porechop](https://github.com/rrwick/Porechop). Barbell can additionally demultiplex tagged reads so that every barcode is analyzed separately by the downstream workflow. The preprocessed reads, including raw fallback reads when using Barbell, become aligned with the map-ont flag of [minimap2](https://github.com/lh3/minimap2) to the 45SN1 reference of [hg38](https://www.gencodegenes.org/human/). The ids of reads aligning to 45SN1 are used to filter the original pod5 file. The filtered pod5 file is rebasecalled using the integrated models for modification detection and polyA taillength of dorado. The read ids in the resulting unaligned bam file is used to collect metainformation about reads on a single nucleotide resolution.
 Rebasecalled reads become aligned to the 45SN1 reference. Resulting bam files are used to perform several clustering algorithms. The pipeline includes a template-based and template-free clustering approaches.  
 
 ### Template-based fragment association
@@ -175,7 +177,7 @@ All the outputs will be provided in the default workfolder of Epi2Me.
 │   │
 │   ├── basecalled_not_trimmed.bam              # Unaligned basecalling output of dorado untrimmed
 │   ├── basecalled_not_trimmed.fastq.gz         # Converted fastq file of basecalling output untrimmed 
-│   ├── basecalled.fastq.gz                     # Converted fastq file of basecalling output trimmed with porechop
+│   ├── basecalled.fastq.gz                     # Preprocessed FASTQ; Barbell output includes unchanged fallback reads
 │   ├── filtered.bam                            # Alignment of basecalled.fastq.gz to 45SN1 of hg38 
 │   ├── filtered.bam.bai                        # Index for above
 │   ├── filtered.fastq.gz                       # Converted fastq file of filtered.bam 

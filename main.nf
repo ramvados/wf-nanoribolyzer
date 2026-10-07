@@ -115,8 +115,9 @@ process trim_barcodes{
         val(demultiplex)
 
     output:
-        path("basecalled.fastq.gz"), emit: combined_fastq, optional: true
         path("trimmed/*.fastq.gz"), emit: demultiplexed_fastqs, optional: true
+        path("trimmed"), emit: trimmed_directory
+        path("filtered.tsv"), emit: filter_table
 
     script:
     """
@@ -142,13 +143,47 @@ process trim_barcodes{
         -o trimmed \
         --gzip
 
-    if [ "${demultiplex}" != "true" ]
-    then
-        zcat trimmed/*.fastq.gz | gzip -c > basecalled.fastq.gz
-    fi
     """
 }
 
+
+process retain_barbell_reads {
+    label 'other_tools'
+    publishDir "${params.out_dir}/shared/barbell_retention/", mode: 'copy'
+
+    input:
+        path(raw_fastq)
+        path(trimmed_directory), stageAs: "barbell_trimmed"
+        path(filter_table), stageAs: "filtered.tsv"
+        path(fallback_script), stageAs: "barbell_fallback.py"
+
+    output:
+        path("basecalled.fastq.gz"), emit: combined_fastq
+        path("samples"), emit: sample_directory
+        path("retention_counts.tsv"), emit: counts
+
+    script:
+    """
+    mkdir samples
+
+    if compgen -G "barbell_trimmed/*.fastq.gz" > /dev/null; then
+        cp barbell_trimmed/*.fastq.gz samples/
+    fi
+
+    python3 barbell_fallback.py \
+        --raw ${raw_fastq} \
+        --trimmed barbell_trimmed \
+        --filtered filtered.tsv \
+        --output samples/unassigned.fastq.gz \
+        --counts retention_counts.tsv
+
+    if awk -F '\\t' '\$1 == "fallback_raw" && \$2 == 0 { found=1 } END { exit !found }' retention_counts.tsv; then
+        rm samples/unassigned.fastq.gz
+    fi
+
+    zcat samples/*.fastq.gz | gzip -c > basecalled.fastq.gz
+    """
+}
 
 process porechop_trimming{
     label 'other_tools'
@@ -853,7 +888,7 @@ workflow{
         error "No POD5, FAST5 or BAM input found in ${params.sample_folder}"
     }
 
-    def preprocessing_method = (params.preprocessing_method ?: 'porechop').toString().trim().toLowerCase()
+    def preprocessing_method = (params.preprocessing_method ?: 'barbell').toString().trim().toLowerCase()
     if (!['porechop', 'barbell'].contains(preprocessing_method)) {
         error "Unsupported preprocessing_method: ${preprocessing_method}. Use porechop or barbell."
     }
@@ -882,9 +917,20 @@ workflow{
             demultiplex_enabled
         )
 
+        retain_barbell_reads(
+            dorado_basecalling.out.fastq_not_trimmed,
+            trim_barcodes.out.trimmed_directory,
+            trim_barcodes.out.filter_table,
+            file("${projectDir}/bin/barbell_fallback.py")
+        )
+
         if (demultiplex_enabled) {
-            sample_fastqs = trim_barcodes.out.demultiplexed_fastqs
-                .flatten()
+            sample_fastqs = retain_barbell_reads.out.sample_directory
+                .flatMap { directory ->
+                    directory.toFile().listFiles()
+                        .findAll { entry -> entry.name.endsWith('.fastq.gz') }
+                        .collect { entry -> file(entry.toPath()) }
+                }
                 .map { fastq ->
                     def sample_id = fastq.name
                         .replaceFirst(/\.fastq\.gz$/, '')
@@ -895,12 +941,12 @@ workflow{
 
             if (selected_barcodes) {
                 sample_fastqs = sample_fastqs.filter { sample_id, _fastq ->
-                    selected_barcodes.contains(sample_id)
+                    sample_id == 'unassigned' || selected_barcodes.contains(sample_id)
                 }
             }
         } else {
             def sample_name = params.sample_name ?: 'sample'
-            sample_fastqs = trim_barcodes.out.combined_fastq.map { fastq ->
+            sample_fastqs = retain_barbell_reads.out.combined_fastq.map { fastq ->
                 tuple(sample_name, fastq)
             }
         }

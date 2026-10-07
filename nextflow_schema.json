@@ -106,8 +106,8 @@
                         "porechop",
                         "barbell"
                     ],
-                    "default": "porechop",
-                    "description": "Select Porechop or Barbell preprocessing."
+                    "default": "barbell",
+                    "description": "Select Barbell with raw-read retention (default), or Porechop."
                 },
                 "demultiplex": {
                     "title": "Demultiplex Barbell samples",
