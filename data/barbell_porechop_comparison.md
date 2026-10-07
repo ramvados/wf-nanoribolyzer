@@ -182,3 +182,26 @@ Alpha 0.4 remains the default. Alpha 0.2 remains experimental:
 it increases candidate yield, but most additional assignments lack
 independent confirmation, and additional annotation patterns cause
 the current filter to reject some previously retained reads.
+
+## Fresh Porechop comparison with raw-read fallback
+
+Porechop was rerun on the same raw FASTQ input. Its output was aligned
+with minimap2 2.28 using map-ont, -c and --secondary=no against RDN37-1.fa,
+matching the settings of the raw-read fallback comparison.
+
+Porechop split-read suffixes were collapsed to original read IDs.
+Reference intervals were merged per original read, reference and strand.
+
+- Fresh Porechop: 57,615 original reads with rRNA hits.
+- Barbell with raw-read fallback: 57,667 reads with rRNA hits.
+- Shared original reads: 57,615.
+- Reads with hits only after Porechop: 0.
+- Reads with hits only after Barbell fallback: 52.
+- Identical reference intervals and orientations: 55,979.
+- Barbell fallback retained all Porechop reference intervals and
+  extended them for 1,636 shared reads.
+
+No Porechop rRNA-hit read or aligned reference interval was lost in
+this dataset. This evaluates rRNA retention, not complete adapter
+removal or general superiority. The optional context-trimming
+experiment is documented separately in barbell_retention.md.
